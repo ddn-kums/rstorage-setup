@@ -1,0 +1,338 @@
+
+Perform necessary health checks after reboots
+Execute on client1
+ubuntu@infinia-client1:/mnt/ddn/prechecks/scripts$ hostname; pwd
+infinia-client1
+/mnt/ddn/prechecks/scripts
+
+./infinia_precheck.sh 2>&1 | tee -a oci_health_status_`date +%F-%T`.txt
+
+nsdperf runs
+$ pwd
+/mnt/ddn/benchmarks/nsdperf/scripts
+
+0. Preqisites
+
+$ hostname
+infinia-client1
+$ pdsh -w node[1-6] "sudo nvme --list | grep SAMSUNG | wc -l" | dshbak -c
+----------------
+node[1-6]
+----------------
+12
+
+$ pdsh -w node[1-6] "sudo rdma link show | grep ACTIVE" | dshbak -c
+----------------
+node[1-6]
+----------------
+link rocep97s0/1 state ACTIVE physical_state LINK_UP netdev ens300np0 
+
+# Delete old warp output file from the client nodes
+$ pdsh -w client[1-6] "rm -f /home/ubuntu/warp*.zst" | dshbak -c
+
+#Check all clients and server nodes are UP
+$ pdsh -w node[1-6],client[1-6] "date" | dshbak -c
+----------------
+client[1-6],node[1-6]
+----------------
+Thu May  8 20:10:15 UTC 2025
+
+1. Verify that NFS is mounted on the server nodes
+
+pdsh -w node[1-6] "df -h | grep ddn" | dshbak -c
+pdsh -w node[1-6] "sudo mount -t nfs client1:/mnt/ddn /mnt/ddn" | dshbak -c
+pdsh -w node[1-6] "ls /mnt/ddn" | dshbak -c
+# To unmount
+pdsh -w node[1-6] "sudo umount /mnt/ddn" | dshbak -c
+
+2. Verify no red containers are running
+
+Execute on client1
+
+$ pdsh -w node[1-6] "docker ps" | dshbak -c
+
+Do teardown if older setup is running
+
+cd /mnt/ddn/infinia_setup/scripts/
+./p_teardown.sh
+
+# single node
+sudo teardown.sh
+
+3. ssh into client1 and setup redsetup
+
+## Set the Release Version
+ubuntu@infinia-client1:/mnt/ddn/infinia_setup/scripts$ pwd
+/mnt/ddn/infinia_setup/scripts
+ubuntu@infinia-client1:/mnt/ddn/infinia_setup/scripts$ grep 'RED_VER' setup.sh setup_worker_nodes.sh| grep 2.1
+setup.sh:export RED_VER="2.1.30"
+setup_worker_nodes.sh:export RED_VER="2.1.30"
+
+
+ssh into node1
+
+$ hostname
+infinia-node1
+$ pwd
+/mnt/ddn/infinia_setup/scripts
+
+./infinia_realm_entry_node_setup.sh
+
+Monitor master node install using: 
+sudo iftop -B -i ens300np0
+
+3.5 On worker nodes 
+
+# Setup worker nodes
+
+$ pwd
+/mnt/ddn/infinia_setup/scripts
+
+Execute on client1
+
+$ ./p_setup_non-realm-entry_server_nodes.sh
+
+4. sudo and verify
+
+pdsh -w node[1-6] "sudo redsetup -v" | dshbak -c
+
+
+4.5 To apply special tuning override
+
+pdsh -w node[1-6] "sudo cp /mnt/ddn/infinia_setup/scripts/ORACLE_SERVER_E5-2c-overrides.yaml /opt/ddn/red/hwconfig-files/" | dshbak -c
+pdsh -w node[1-6] "sudo chmod 0755 /opt/ddn/red/hwconfig-files/ORACLE_SERVER_E5-2c-overrides.yaml" | dshbak -c
+
+## Tuning 1
+$ pdsh -w node[1-6] "sudo md5sum /opt/ddn/red/hwconfig-files/ORACLE_SERVER_E5-2c-overrides.yaml" | dshbak -c
+----------------
+node[1-6]
+----------------
+9aeafd2a41b7b383909cecc18e6dd2c8  /opt/ddn/red/hwconfig-files/ORACLE_SERVER_E5-2c-overrides.yaml
+
+# Tuning 2
+ubuntu@infinia-client1:~$ pdsh -w node[1-6] "sudo md5sum /opt/ddn/red/hwconfig-files/ORACLE_SERVER_E5-2c-overrides.yaml" | dshbak -c
+----------------
+node[1-6]
+----------------
+0580a94c332c78b1344a65e6f65d5143  /opt/ddn/red/hwconfig-files/ORACLE_SERVER_E5-2c-overrides.yaml
+
+5. Setup cluster
+
+Execute in node1
+ubuntu@infinia-node1:/mnt/ddn/infinia_setup/scripts$ pwd
+/mnt/ddn/infinia_setup/scripts
+
+ubuntu@infinia-node1:/mnt/ddn/infinia_setup/scripts$ ./infinia_cluster_setup.sh
+
+ubuntu@infinia-node1:~$ ruls
+4:14PM INF User "realm_admin" logged in successfully.
+ubuntu@infinia-node1:~$ redcli cluster show
+4:14PM INF Auto Selecting cluster: cluster1
+4:14PM INF Set limit to 25.
+┌──────────┬─────────┬───────────────┬─────────────────┬────────────────┬───────────────────┬────────────────┬──────────┬───────────────┬──────────────┬─────────────────┐
+│   NAME   │  STATE  │     LEADER    │ FEATURE VERSION │ RUNTIME CONFIG │ INSTANCES/EVICTED │ DRIVES/EVICTED │ CAPACITY │     %USAGE    │ PROVISIONING │ NETWORK TYPE(S) │
+│          │         │               │                 │                │                   │                │          │               │     RATIO    │                 │
+├──────────┼─────────┼───────────────┼─────────────────┼────────────────┼───────────────────┼────────────────┼──────────┼───────────────┼──────────────┼─────────────────┤
+│ cluster1 │ running │ infinia-node1 │          2.1.30 │    auto_config │               6/0 │           72/0 │ 449.1 TB │ 1.078 GB (0%) │         1.00 │  [tcp tcp roce] │
+└──────────┴─────────┴───────────────┴─────────────────┴────────────────┴───────────────────┴────────────────┴──────────┴───────────────┴──────────────┴─────────────────┘
+
+
+ubuntu@infinia-node1:~$ redcli network list
+3:37PM INF Auto Selecting cluster: cluster1
+3:37PM INF Auto Selecting config: auto_config
+┌──────────────────────────────────────┬─────────────────────────────────────┬──────┬────────┬────────────┬─────────────┬─────────────┬──────────────┬────────┬────────────────────┐
+│                 UUID                 │                 NAME                │ TYPE │ BACKUP │ ENCRYPTION │ EQ NENTRIES │ CQ NENTRIES │ MAX CQ COUNT │ WEIGHT │ TAGS               │
+├──────────────────────────────────────┼─────────────────────────────────────┼──────┼────────┼────────────┼─────────────┼─────────────┼──────────────┼────────┼────────────────────┤
+│ 221e1037-1b5c-4b8f-9d28-f8dc6e8a5563 │                             lo-auto │  tcp │  false │      false │         100 │       16384 │           64 │    100 │ NVMF_DATA_SERVICE  │
+│                                      │                                     │      │        │            │             │             │              │        │ NFS_DATA_SERVICE   │
+│                                      │                                     │      │        │            │             │             │              │        │ SQL_DATA_SERVICE   │
+│                                      │                                     │      │        │            │             │             │              │        │ SMB_DATA_SERVICE   │
+│                                      │                                     │      │        │            │             │             │              │        │ REDFS_DATA_SERVICE │
+│                                      │                                     │      │        │            │             │             │              │        │ RPC_LOOPBACK       │
+├──────────────────────────────────────┼─────────────────────────────────────┼──────┼────────┼────────────┼─────────────┼─────────────┼──────────────┼────────┼────────────────────┤
+│ c337e5af-1301-459f-a297-23e730b785dc │ roce-auto-VLAN_0-SUBNET_10.0.1.0/24 │ roce │  false │      false │         100 │       16384 │           64 │     -1 │ NVMF_DATA_SERVICE  │
+│                                      │                                     │      │        │            │             │             │              │        │ NFS_DATA_SERVICE   │
+│                                      │                                     │      │        │            │             │             │              │        │ SQL_DATA_SERVICE   │
+│                                      │                                     │      │        │            │             │             │              │        │ SMB_DATA_SERVICE   │
+│                                      │                                     │      │        │            │             │             │              │        │ REDFS_DATA_SERVICE │
+├──────────────────────────────────────┼─────────────────────────────────────┼──────┼────────┼────────────┼─────────────┼─────────────┼──────────────┼────────┼────────────────────┤
+│ bdbf939a-3943-4c71-836b-ed63227f2ad9 │  tcp-auto-VLAN_0-SUBNET_10.0.1.0/24 │  tcp │  false │      false │         100 │       16384 │           64 │    100 │ NVMF_DATA_SERVICE  │
+│                                      │                                     │      │        │            │             │             │              │        │ NFS_DATA_SERVICE   │
+│                                      │                                     │      │        │            │             │             │              │        │ SQL_DATA_SERVICE   │
+│                                      │                                     │      │        │            │             │             │              │        │ SMB_DATA_SERVICE   │
+│                                      │                                     │      │        │            │             │             │              │        │ REDFS_DATA_SERVICE │
+└──────────────────────────────────────┴─────────────────────────────────────┴──────┴────────┴────────────┴─────────────┴─────────────┴──────────────┴────────┴────────────────────┘
+
+6. Setup S3
+
+pdsh -w node[1-6] "docker ps | egrep 'reds3|redagent'" | dshbak -c
+
+ubuntu@infinia-node1:/mnt/ddn/infinia_setup/scripts$ ./infinia_s3_setup.sh
+
+7. Update bashrc and .aws/credentials with KEY in node1
+export AWS_ACCESS_KEY_ID="FJOKLDWXGE68BBWSL3RS"
+export AWS_SECRET_ACCESS_KEY="y3FXVnTjpnn6bXwubz6h5QQkiCZUcjTjDttqlUg9"
+export S3_KEY="FJOKLDWXGE68BBWSL3RS"
+export S3_SECRET="y3FXVnTjpnn6bXwubz6h5QQkiCZUcjTjDttqlUg9"
+
+$ cat .aws/credentials 
+[default]
+aws_access_key_id=FJOKLDWXGE68BBWSL3RS
+aws_secret_access_key=y3FXVnTjpnn6bXwubz6h5QQkiCZUcjTjDttqlUg9
+
+8. Clone .bashrc and .aws to rest of the nodes
+
+
+ubuntu@infinia-node1:/mnt/ddn/infinia_setup/scripts$ ./update_s3_config_all_nodes.sh
+
+9.1 Verify in S3 server
+
+ubuntu@infinia-client1:~$ pdsh -w node[1-6] "redcli user login admin -p DDN1nfini@R0cks! -t red" | dshbak -c
+ubuntu@infinia-client1:~$ pdsh -w node[1-6] "redcli s3 bucket list -t red | grep bucket" | dshbak -c
+
+9.2 Verify in S3 client
+
+ubuntu@infinia-client2:~$ aws --ca-bundle=ca.pem --endpoint-url=$S3URL_HSE s3 ls
+2025-05-09 16:19:16 bucket3
+2025-05-09 16:19:16 bucket2
+2025-05-09 16:19:15 bucket1
+
+ubuntu@infinia-client2:~$ aws --ca-bundle=ca.pem --endpoint-url=$S3URL_HSE s3 mb s3://bucket4
+make_bucket: bucket4
+ubuntu@infinia-client2:~$ aws --ca-bundle=ca.pem --endpoint-url=$S3URL_HSE s3 mb s3://bucket5
+make_bucket: bucket5
+ubuntu@infinia-client2:~$ aws --ca-bundle=ca.pem --endpoint-url=$S3URL_HSE s3 ls
+2025-05-09 16:37:18 bucket4
+2025-05-09 16:19:16 bucket3
+2025-05-09 16:19:16 bucket2
+2025-05-09 16:19:15 bucket1
+2025-05-09 16:37:27 bucket5
+
+
+rula
+ubuntu@infinia-client1:~$ pdsh -w node[1-6] "redcli s3 bucket list -t red | grep bucket" | dshbak -c
+
+----------------
+node[1-6]
+----------------
+│ bucket1 │ admin │ -        │ 24.99 kB │
+│ bucket2 │ admin │ -        │ 25.15 kB │
+│ bucket3 │ admin │ -        │ 25.15 kB │
+│ bucket4 │ admin │ -        │ 29.98 kB │
+│ bucket5 │ admin │ -        │ 29.98 kB │
+
+aws client setup
+----------------
+
+https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html
+
+$ curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+sudo apt install unzip
+unzip awscliv2.zip
+sudo ./aws/install
+
+ubuntu@infinia-client2:~$ whereis aws
+aws: /usr/local/bin/aws
+
+ubuntu@infinia-client2:~$ ls -l /usr/local/bin/ | grep aws
+lrwxrwxrwx 1 root root 37 Apr 28 21:24 aws -> /usr/local/aws-cli/v2/current/bin/aws
+lrwxrwxrwx 1 root root 47 Apr 28 21:24 aws_completer -> /usr/local/aws-cli/v2/current/bin/aws_completer
+
+ubuntu@infinia-client2:~$ cd /usr/local/
+sudo su
+sudo chmod -R 0755 aws-cli
+
+nodeadmin@srt013:~$ aws --version
+aws-cli/2.23.13 Python/3.12.6 Linux/6.8.0-51-generic exe/x86_64.ubuntu.24
+
+Running Warp
+-------------
+
+
+client1
+
+Create a screen-session
+
+pdsh -w client[1-6] "warp -v" | dshbak -c
+pdsh -w client[1-6] "mkdir -p /tmp/kums" | dshbak -c
+pdsh -w client[1-6] "warp client > /tmp/kums/warp-log.txt 2>&1 &" | dshbak -c
+pdsh -w client[1-6] "pgrep warp" | dshbak -c
+pdsh -w client[1-6] "pkill warp" | dshbak -c
+
+Verify NFS mounted on all clients
+$ pdsh -w node[1-6],client[1-6] "ls /mnt/ddn" | dshbak -c
+
+
+Health Checks
+-------------
+
+pdsh -w node[1-6] "docker ps | egrep 'reds3|redagent'" | dshbak -c
+pdsh -w node[1-6] "ls -l /var/log/red/reds3*/ | grep reds3$" | dshbak -c
+pdsh -w node[1-6] "ls -l /var/log/red/cluster1-45f6cacb-4c1c-40a1-a9ab-7c5a86ee2ec6/*/* | egrep -i 'sig|panic|quorum|etx'" | dshbak -c
+pdsh -w node[1-6] "grep PANIC /var/log/red/reds3*/reds3.log" | dshbak -c
+date; pdsh -w node[1-6] "grep CRITC /var/log/red/cluster1-bdeafe8d-bfcb-48e4-9c80-3520f58d5298/*/instance.log" | dshbak -c
+
+## Capturing sig_10 dumps and log bundle
+
+ruls
+
+ubuntu@infinia-node5:~$ redcli logs dump -T --target instances -r "REDFE-1308"
+6:35PM INF Dump request submitted successfully.
+ubuntu@infinia-node5:~$ redcli logs dump -T --target reds3 -r "REDFE-1308"
+6:35PM INF Dump request submitted successfully.
+ubuntu@infinia-node5:~$ redcli logs upload -C "REDFE-1308" -l heavy -b ddn_production
+6:37PM INF Creating heavy log bundle
+6:37PM INF Collecting logs from [infinia-node3 infinia-node2 infinia-node5 infinia-node1 infinia-node6 infinia-node4]
+6:37PM INF Logs upload task [b3eefa76-7911-4992-aecd-d0b8701a6059] has been started.
+6:37PM INF Logs URL: s3://inbound-w/ddnred/73639EB2-588A-EB0F-F655-D6403D6791EE/red_realm_001/REDFE-1308/heavy_20250513183724-9aa9bf29-e4ab-46aa-bdb0-20bc582ce934.tar on server 127.0.0.1
+
+ubuntu@infinia-client1:~$ pdsh -w node[1-6] "ls -l /var/log/red/cluster1-9aa9bf29-e4ab-46aa-bdb0-20bc582ce934/*/* | egrep -i 'sig|panic|quorum|etx'" | dshbak -c
+----------------
+node1
+----------------
+/var/log/red/cluster1-9aa9bf29-e4ab-46aa-bdb0-20bc582ce934/1/2025-05-13_18:35:04.199763-sig_10:
+----------------
+node2
+----------------
+/var/log/red/cluster1-9aa9bf29-e4ab-46aa-bdb0-20bc582ce934/2/2025-05-13_18:35:04.304005-sig_10:
+----------------
+node3
+----------------
+/var/log/red/cluster1-9aa9bf29-e4ab-46aa-bdb0-20bc582ce934/3/2025-05-13_18:35:04.329317-sig_10:
+----------------
+node4
+----------------
+/var/log/red/cluster1-9aa9bf29-e4ab-46aa-bdb0-20bc582ce934/4/2025-05-13_18:35:04.397663-sig_10:
+----------------
+node5
+----------------
+/var/log/red/cluster1-9aa9bf29-e4ab-46aa-bdb0-20bc582ce934/5/2025-05-13_18:35:04.447848-sig_10:
+----------------
+node6
+----------------
+/var/log/red/cluster1-9aa9bf29-e4ab-46aa-bdb0-20bc582ce934/6/2025-05-13_18:35:04.599867-sig_10:
+ubuntu@infinia-client1:~$ pdsh -w node[1-6] "ls -l /var/log/red/reds3*/ | grep reds3$" | dshbak -c
+----------------
+node1
+----------------
+drwxr-sr-x 4 root red 12288 May 13 18:35 2025-05-13_18:35:19.476808-sig_10.106.reds3
+----------------
+node2
+----------------
+drwxr-sr-x 4 root red 12288 May 13 18:35 2025-05-13_18:35:19.364977-sig_10.107.reds3
+----------------
+node3
+----------------
+drwxr-sr-x 4 root red 12288 May 13 18:35 2025-05-13_18:35:19.324830-sig_10.107.reds3
+----------------
+node4
+----------------
+drwxr-sr-x 4 root red 12288 May 13 18:35 2025-05-13_18:35:19.325847-sig_10.107.reds3
+----------------
+node5
+----------------
+drwxr-sr-x 4 root red 12288 May 13 18:35 2025-05-13_18:35:19.468940-sig_10.105.reds3
+----------------
+node6
+----------------
+drwxr-sr-x 4 root red 12288 May 13 18:35 2025-05-13_18:35:19.474933-sig_10.110.reds3
