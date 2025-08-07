@@ -1,5 +1,18 @@
 #!/usr/bin/env python3
+# pylint: skip-file
 """
+#
+# @copyright
+#                               --- WARNING ---
+#
+#     This work contains trade secrets of DataDirect Networks, Inc.  Any
+#     unauthorized use or disclosure of the work, or any part thereof, is
+#     strictly prohibited. Any use of this work without an express license
+#     or permission is in violation of applicable laws.
+#
+# @copyright DataDirect Networks, Inc. CONFIDENTIAL AND PROPRIETARY
+# @copyright DataDirect Networks Copyright, Inc. (c) 2021-2024. All rights reserved.
+#
 Core Mask Generator Tool
 Generates proper core masks for various tasks on systems with 32c/64t and above
 """
@@ -7,10 +20,25 @@ Generates proper core masks for various tasks on systems with 32c/64t and above
 import subprocess
 import re
 import json
+import yaml
 from collections import defaultdict
 from typing import List, Dict, Tuple, Set
 import argparse
 import sys
+
+
+class QuotedStr(str):
+    """String subclass that forces YAML to quote the value"""
+    pass
+
+
+def quoted_str_representer(dumper, data):
+    """Custom YAML representer for QuotedStr that forces double quotes"""
+    return dumper.represent_scalar('tag:yaml.org,2002:str', data, style='"')
+
+
+# Register the custom representer
+yaml.add_representer(QuotedStr, quoted_str_representer)
 
 
 class SystemTopology:
@@ -145,15 +173,15 @@ class SystemTopology:
     def _parse_mellanox_adapters_lspci(self):
         """Parse Mellanox adapters using lspci"""
         try:
-            lspci_output = subprocess.check_output(['lspci'], text=True)
-            mellanox_pattern = re.compile(r'([0-9a-f]{2}:[0-9a-f]{2}\.[0-9a-f])\s+.*Mellanox.*')
+            lspci_output = subprocess.check_output(['lspci -D'], text=True)
+            mellanox_pattern = re.compile(r'^([0-9a-fA-F]{4}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}\.[0-9a-fA-F])\s+.*Mellanox.*$', re.MULTILINE)
             
             for match in mellanox_pattern.finditer(lspci_output):
                 pci_addr = match.group(1)
                 
                 # Get NUMA node for this PCI device
                 try:
-                    numa_path = f'/sys/bus/pci/devices/0000:{pci_addr}/numa_node'
+                    numa_path = f'/sys/bus/pci/devices/{pci_addr}/numa_node'
                     with open(numa_path, 'r') as f:
                         numa_node = int(f.read().strip())
                         if numa_node >= 0:
@@ -476,40 +504,40 @@ class CoreMaskGenerator:
         # Update others_cpuset with remaining unused cores
         self.others_cpuset = available_others
     
-    def print_results(self):
+    def print_results(self, file=sys.stdout):
         """Print all generated CPU sets"""
-        print("\n=== SYSTEM TOPOLOGY ===")
-        print(f"Total cores: {self.topology.total_cores}")
-        print(f"Total threads: {self.topology.total_threads}")
-        print(f"NUMA nodes: {len(self.topology.numa_nodes)}")
+        print("\n=== SYSTEM TOPOLOGY ===", file=file)
+        print(f"Total cores: {self.topology.total_cores}", file=file)
+        print(f"Total threads: {self.topology.total_threads}", file=file)
+        print(f"NUMA nodes: {len(self.topology.numa_nodes)}", file=file)
         
-        print("\n=== NUMA TOPOLOGY ===")
+        print("\n=== NUMA TOPOLOGY ===", file=file)
         for numa_id, cpus in sorted(self.topology.numa_nodes.items()):
-            print(f"NUMA node{numa_id} CPU(s): {self._format_cpu_list(cpus)}")
+            print(f"NUMA node{numa_id} CPU(s): {self._format_cpu_list(cpus)}", file=file)
         
-        print("\n=== DEVICES ===")
-        print(f"NVMe devices found: {len(self.topology.nvme_devices)}")
+        print("\n=== DEVICES ===", file=file)
+        print(f"NVMe devices found: {len(self.topology.nvme_devices)}", file=file)
         for device in self.topology.nvme_devices:
-            print(f"  {device['name']}: NUMA node {device['numa_node']}")
+            print(f"  {device['name']}: NUMA node {device['numa_node']}", file=file)
         
-        print(f"\nMellanox adapters found: {len(self.topology.mellanox_adapters)}")
+        print(f"\nMellanox adapters found: {len(self.topology.mellanox_adapters)}", file=file)
         for adapter in self.topology.mellanox_adapters:
-            print(f"  PCI {adapter['pci']}: NUMA node {adapter['numa_node']}")
+            print(f"  PCI {adapter['pci']}: NUMA node {adapter['numa_node']}", file=file)
         
-        print("\n=== GENERATED CPU SETS ===")
-        print(f"cat_cpuset: {self._format_cpu_list(self.cat_cpuset)}")
-        print(f"cat_affine_cpuset: {self._format_cpu_list(self.cat_affine_cpuset)}")
-        print(f"nvmf_cpuset: {self._format_cpu_list(self.nvmf_cpuset)}")
-        print(f"net_cpuset: {self._format_cpu_list(self.net_cpuset)}")
-        print(f"handler_cpuset: {self._format_cpu_list(self.handler_cpuset)}")
-        print(f"redfs_cpuset: {self._format_cpu_list(self.redfs_cpuset)}")
-        print(f"reds3_cpuset: {self._format_cpu_list(self.reds3_cpuset)}")
-        print(f"reds3_sibling_cpuset: {','.join(self.reds3_sibling_cpuset)}")
-        print(f"posix_cpuset: {self._format_cpu_list(self.posix_cpuset)}")
-        print(f"auxiliary_cpuset: {self._format_cpu_list(self.auxiliary_cpuset)}")
-        print(f"spdk_main_cpuset: {self._format_cpu_list(self.spdk_main_cpuset)}")
-        print(f"etcd_cpuset: {self._format_cpu_list(self.etcd_cpuset)}")
-        print(f"others_cpuset (remaining): {self._format_cpu_list(self.others_cpuset)}")
+        print("\n=== GENERATED CPU SETS ===", file=file)
+        print(f"cat_cpuset: {self._format_cpu_list(self.cat_cpuset)}", file=file)
+        print(f"cat_affine_cpuset: {self._format_cpu_list(self.cat_affine_cpuset)}", file=file)
+        print(f"nvmf_cpuset: {self._format_cpu_list(self.nvmf_cpuset)}", file=file)
+        print(f"net_cpuset: {self._format_cpu_list(self.net_cpuset)}", file=file)
+        print(f"handler_cpuset: {self._format_cpu_list(self.handler_cpuset)}", file=file)
+        print(f"redfs_cpuset: {self._format_cpu_list(self.redfs_cpuset)}", file=file)
+        print(f"reds3_cpuset: {self._format_cpu_list(self.reds3_cpuset)}", file=file)
+        print(f"reds3_sibling_cpuset: {','.join(self.reds3_sibling_cpuset)}", file=file)
+        print(f"posix_cpuset: {self._format_cpu_list(self.posix_cpuset)}", file=file)
+        print(f"auxiliary_cpuset: {self._format_cpu_list(self.auxiliary_cpuset)}", file=file)
+        print(f"spdk_main_cpuset: {self._format_cpu_list(self.spdk_main_cpuset)}", file=file)
+        print(f"etcd_cpuset: {self._format_cpu_list(self.etcd_cpuset)}", file=file)
+        print(f"others_cpuset (remaining): {self._format_cpu_list(self.others_cpuset)}", file=file)
     
     def export_json(self, filename):
         """Export results to JSON file"""
@@ -569,6 +597,127 @@ class CoreMaskGenerator:
         return ",".join(result)
 
 
+def _format_cpuset_value(cpus):
+    """Format CPU set value for hwconfig files"""
+    if not cpus:
+        return ""
+
+    cpu_str = ','.join(map(str, cpus))
+
+    # Return as QuotedStr to force double quotes in YAML
+    return QuotedStr(cpu_str)
+
+
+def _format_cpulist_value(cpus):
+    """Format CPU list value for hwconfig files"""
+    if not cpus:
+        return ""
+
+    # Group consecutive CPUs for cpulist format
+    result = []
+    i = 0
+    while i < len(cpus):
+        start = cpus[i]
+        end = start
+
+        while i + 1 < len(cpus) and cpus[i + 1] == cpus[i] + 1:
+            i += 1
+            end = cpus[i]
+
+        if start == end:
+            result.append(str(start))
+        else:
+            result.append(f"{start}-{end}")
+
+        i += 1
+
+    cpu_str = ",".join(result)
+
+    # Return as QuotedStr to force double quotes in YAML
+    return QuotedStr(cpu_str)
+
+
+def generate_hwconfig(topology, generator, hwmodel, summary, comments):
+    """Generate a configuration in the hwconfig-files format"""
+    # Create the basic structure
+    if not summary:
+        summary = f"Configuration for system with {topology.total_cores} cores and {len(topology.numa_nodes)} NUMA domains"
+
+    config = {
+        'description': {
+            'node': {
+                'summary': summary,
+                'hwmodel': hwmodel,
+                'comments': comments,
+                'cores': topology.total_threads,
+                'numa_nodes': len(topology.numa_nodes),
+                'numa_cpu_list': []
+            }
+        },
+        'etcd': {
+            'resources': {
+                'cpuset': _format_cpuset_value(generator.etcd_cpuset),
+                'mem_limit': 8192
+            }
+        },
+        'reds3': {
+            'resources': {
+                'redfs_cpuset': _format_cpuset_value(generator.redfs_cpuset),
+                'reds3_cpuset': _format_cpuset_value(generator.reds3_cpuset),
+                'reds3_sibling_cpuset': QuotedStr(",".join(generator.reds3_sibling_cpuset)),
+                'mem_limit': 55320
+            },
+            'environment': {
+                'RED_WIDTH': 16,
+                'RED_FS_S3_BUCKET_STRIPES': 128,
+                'RED_WORKLOAD': 3,
+                'REDS3_iomem': 1
+            }
+        },
+        'redagent': {
+            'resources': {
+                'mem_limit': 55320,
+                'cat_cpuset': _format_cpuset_value(generator.cat_cpuset),
+                'cat_affine_cpuset': _format_cpuset_value(generator.cat_affine_cpuset),
+                'handler_cpuset': _format_cpuset_value(generator.handler_cpuset),
+                'net_cpuset': _format_cpuset_value(generator.net_cpuset),
+                'nvmf_cpuset': _format_cpuset_value(generator.nvmf_cpuset),
+                'posix_cpuset': _format_cpuset_value(generator.posix_cpuset),
+                'auxiliary_cpuset': _format_cpuset_value(generator.auxiliary_cpuset),
+                'spdk_main_cpuset': _format_cpuset_value(generator.spdk_main_cpuset)
+            },
+            'environment': {
+                'JE_MALLOC_CONF': 'prof:true,prof_active:false'
+            }
+        },
+        'cluster': {
+            'tunables': {
+                'c2s_credit_low': 64,
+                'c2s_credit_high': 128,
+                'rpc_c2s_credits': 32,
+                'rpc_s2s_credits': 128,
+                'ring_max_ninflight': 512,
+                'ring_max_dequeue_size': 182,
+                'rpc_rdma_pool_sz': 2000,
+                'client_rdma_pool_sz': 2000
+            },
+            'cats': {
+                'bulk_cachesz': 273741824,
+                'bept_cachesz': 3147483648
+            }
+        }
+    }
+
+    # Add NUMA node information
+    for numa_id, cpus in sorted(topology.numa_nodes.items()):
+        config['description']['node']['numa_cpu_list'].append({
+            'numa_node': numa_id,
+            'cpulist': _format_cpulist_value(cpus)
+        })
+
+    return config
+
+
 def main():
     parser = argparse.ArgumentParser(
         description='Generate core masks for high-performance storage systems'
@@ -589,18 +738,83 @@ def main():
         action='store_true',
         help='Show what would be done without making changes'
     )
+    parser.add_argument(
+        '--format',
+        choices=['yaml', 'json', 'text'],
+        default='yaml',
+        help='Output format (default: yaml)'
+    )
+    parser.add_argument(
+        '--output',
+        type=str,
+        help='Output file path (default: stdout)'
+    )
+    parser.add_argument(
+        '--hwmodel',
+        type=str,
+        default='Unsupported',
+        help='Hardware model name'
+    )
+    parser.add_argument(
+        '--summary',
+        type=str,
+        help='Summary description of the hardware'
+    )
+    parser.add_argument(
+        '--comments',
+        type=str,
+        default='None',
+        help='Additional comments about the hardware'
+    )
+    parser.add_argument(
+        '--use-mock-data',
+        action='store_true',
+        help='Use mock data for testing (useful on non-Linux systems)'
+    )
     
     args = parser.parse_args()
     
     # Check if running as root (might be needed for some /sys access)
     if not args.dry_run and os.geteuid() != 0:
         print("Warning: Running without root privileges. Some information may be unavailable.")
-    
+
     # Parse system topology
     print("Parsing system topology...")
     topology = SystemTopology()
-    topology.parse_lscpu()
-    topology.parse_lstopo()
+
+    if args.use_mock_data:
+        print("Using mock data for demonstration...")
+        # Create mock topology for testing
+        topology.total_cores = 64
+        topology.total_threads = 128
+        topology.numa_nodes = {
+            0: list(range(0, 16)) + list(range(64, 80)),
+            1: list(range(16, 32)) + list(range(80, 96)),
+            2: list(range(32, 48)) + list(range(96, 112)),
+            3: list(range(48, 64)) + list(range(112, 128))
+        }
+        # Mock NVMe devices
+        for i in range(12):
+            topology.nvme_devices.append({
+                'name': f'nvme{i}',
+                'pci': f'00:1{i:02x}.0',
+                'numa_node': i % 4
+            })
+        # Mock Mellanox adapters
+        for i in range(2):
+            topology.mellanox_adapters.append({
+                'pci': f'00:2{i:02x}.0',
+                'numa_node': i % 2
+            })
+    else:
+        try:
+            topology.parse_lscpu()
+            topology.parse_lstopo()
+        except (subprocess.CalledProcessError, FileNotFoundError) as e:
+            print(f"Error: Could not parse system topology ({e})")
+            print("This script requires lscpu and other Linux utilities to detect system topology.")
+            print("For testing purposes, you can use the --use-mock-data flag.")
+            sys.exit(1)
     
     # Check minimum requirements
     if topology.total_cores < 32:
@@ -612,12 +826,39 @@ def main():
     generator = CoreMaskGenerator(topology, args.max_pairs)
     generator.generate_masks()
     
-    # Display results
-    generator.print_results()
+    # Display results in text format if requested or no output format specified
+    if args.format == 'text' or (not args.output and not args.export_json and args.format == 'text'):
+        generator.print_results()
     
     # Export if requested
     if args.export_json:
         generator.export_json(args.export_json)
+    
+    # Generate output in the requested format
+    if args.format in ['yaml', 'json'] or args.output:
+        # Create hwconfig-style output
+        config = generate_hwconfig(topology, generator, args.hwmodel, args.summary, args.comments)
+        
+        if args.output:
+            if args.format == 'yaml':
+                with open(args.output, 'w') as f:
+                    yaml.dump(config, f, default_flow_style=False, sort_keys=False)
+                print(f"Configuration exported to {args.output} in YAML format")
+            elif args.format == 'json':
+                with open(args.output, 'w') as f:
+                    json.dump(config, f, indent=2)
+                print(f"Configuration exported to {args.output} in JSON format")
+            else:  # text format to file
+                with open(args.output, 'w') as f:
+                    f.write("# Generated by red-core-mask-generator.py\n\n")
+                    generator.print_results(file=f)
+        else:
+            # Print to stdout
+            if args.format == 'yaml':
+                print("\n# Generated by red-core-mask-generator.py\n")
+                print(yaml.dump(config, default_flow_style=False, sort_keys=False))
+            elif args.format == 'json':
+                print(json.dumps(config, indent=2))
 
 
 if __name__ == "__main__":
